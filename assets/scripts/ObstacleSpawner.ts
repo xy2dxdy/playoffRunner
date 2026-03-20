@@ -1,10 +1,18 @@
-import { _decorator, Component, Node, Prefab, instantiate, UITransform, Vec3 } from 'cc';
+import { _decorator, Component, Node, Prefab, instantiate, UITransform, UIOpacity, Vec3 } from 'cc';
+import { EnemyController } from './EnemyController';
+import { PlayerJump } from './PlayerJump';
 const { ccclass, property } = _decorator;
 
 @ccclass('ObstacleSpawner')
 export class ObstacleSpawner extends Component {
   @property({ type: Prefab, tooltip: 'Префаб препятствия' })
   obstaclePrefab: Prefab | null = null;
+
+  @property({
+    type: [Number],
+    tooltip: 'Если заполнен: спавнить препятствия в эти секунды от старта игры. Если пустой — используется intervalMin/Max.',
+  })
+  obstacleSpawnTimesSec: number[] = [];
 
   @property({ type: Node, tooltip: 'Узел игрока (для проверки столкновений)' })
   playerNode: Node | null = null;
@@ -24,6 +32,24 @@ export class ObstacleSpawner extends Component {
   @property({ tooltip: 'Y позиция препятствия (px, в координатах Canvas)' })
   obstacleY = -175;
 
+  @property({ type: Prefab, tooltip: 'Префаб врага (enemy), двигается влево и тоже бьет игрока' })
+  enemyPrefab: Prefab | null = null;
+
+  @property({
+    type: [Number],
+    tooltip: 'Если заполнен: спавнить enemies в эти секунды от старта игры. Если пустой — используется intervalMin/Max.',
+  })
+  enemySpawnTimesSec: number[] = [];
+
+  @property({ tooltip: 'Y позиция enemy (px, в координатах Canvas)' })
+  enemyY = -175;
+
+  @property({ tooltip: 'Скорость врага влево (px/s). Должна быть больше scrollSpeed платформы.' })
+  enemySpeed = 650;
+
+  @property({ tooltip: 'Марджин за левым краем для врага (px).' })
+  enemyOffscreenMargin = 200;
+
   @property({ tooltip: 'Сколько жизней у игрока' })
   maxLives = 3;
 
@@ -42,18 +68,32 @@ export class ObstacleSpawner extends Component {
   @property({ tooltip: 'Сужение хитбокса препятствия по Y с каждой стороны (px)' })
   obstacleHitboxShrinkY = 5;
 
+  @property({ type: [Node], tooltip: 'Узлы сердец (hearts) на сцене. Порядок: [heart1, heart2, heart3]' })
+  heartNodes: Node[] = [];
+
+  @property({ tooltip: 'Прозрачность потерянного сердца (0–255)' })
+  lostHeartOpacity = 80;
+
   private lives = 3;
   private invincibilityTimer = 0;
   private timeSinceStart = 0;
   private nextSpawnTime = 0;
+  private nextEnemySpawnTime = 0;
   private obstacles: Node[] = [];
+  private enemies: Node[] = [];
   private canvasWidth = 0;
+
+  private obstacleSpawnIndex = 0;
+  private enemySpawnIndex = 0;
 
   start() {
     this.lives = this.maxLives;
     this.invincibilityTimer = 0;
     this.timeSinceStart = 0;
     this.nextSpawnTime = this.firstObstacleDelaySec;
+    this.nextEnemySpawnTime = this.firstObstacleDelaySec;
+    this.obstacleSpawnIndex = 0;
+    this.enemySpawnIndex = 0;
 
     const canvasUi = this.node.getComponent(UITransform);
     if (canvasUi) {
@@ -64,7 +104,7 @@ export class ObstacleSpawner extends Component {
   private gameOver = false;
 
   update(dt: number) {
-    this.moveAndCleanObstacles(dt);
+    this.moveAndCleanHazards(dt);
 
     if (this.gameOver) return;
 
@@ -72,21 +112,12 @@ export class ObstacleSpawner extends Component {
 
     if (this.invincibilityTimer > 0) {
       this.invincibilityTimer -= dt;
-      if (this.playerNode) {
-        const visible = Math.floor(this.invincibilityTimer * 10) % 2 === 0;
-        this.playerNode.active = visible;
-      }
       if (this.invincibilityTimer <= 0) {
         this.invincibilityTimer = 0;
-        if (this.playerNode) this.playerNode.active = true;
       }
     }
 
-    if (this.timeSinceStart >= this.nextSpawnTime) {
-      this.spawnObstacle();
-      this.nextSpawnTime = this.timeSinceStart + this.randomRange(this.intervalMinSec, this.intervalMaxSec);
-    }
-
+    this.handleSpawns();
     this.checkCollisions();
   }
 
@@ -101,7 +132,23 @@ export class ObstacleSpawner extends Component {
     this.obstacles.push(node);
   }
 
-  private moveAndCleanObstacles(dt: number) {
+  private spawnEnemy() {
+    if (!this.enemyPrefab) return;
+
+    const node = instantiate(this.enemyPrefab);
+    node.parent = this.node;
+
+    const spawnX = this.canvasWidth / 2 + 100;
+    node.setPosition(new Vec3(spawnX, this.enemyY, 0));
+    const controller = node.getComponent(EnemyController) ?? node.addComponent(EnemyController);
+    if (controller) {
+      controller.speed = this.enemySpeed;
+      controller.offscreenMargin = this.enemyOffscreenMargin;
+    }
+    this.enemies.push(node);
+  }
+
+  private moveAndCleanHazards(dt: number) {
     const removeList: Node[] = [];
     const leftLimit = -this.canvasWidth / 2 - 200;
 
@@ -120,6 +167,59 @@ export class ObstacleSpawner extends Component {
       if (idx >= 0) this.obstacles.splice(idx, 1);
       obs.destroy();
     }
+
+    // Враги двигаются отдельным скриптом EnemyController, поэтому тут только чистим ссылки
+    // (на случай, если узел не успел само-уничтожиться).
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      if (!e) {
+        this.enemies.splice(i, 1);
+        continue;
+      }
+      const isValid = (e as any).isValid;
+      if (isValid === false) {
+        this.enemies.splice(i, 1);
+        continue;
+      }
+      if (e.position.x < leftLimit) {
+        e.destroy();
+        this.enemies.splice(i, 1);
+      }
+    }
+  }
+
+  private handleSpawns() {
+    if (this.obstacleSpawnTimesSec && this.obstacleSpawnTimesSec.length > 0) {
+      while (
+        this.obstacleSpawnIndex < this.obstacleSpawnTimesSec.length &&
+        this.timeSinceStart >= this.obstacleSpawnTimesSec[this.obstacleSpawnIndex]
+      ) {
+        this.spawnObstacle();
+        this.obstacleSpawnIndex++;
+      }
+    } else {
+      if (this.timeSinceStart >= this.nextSpawnTime) {
+        this.spawnObstacle();
+        this.nextSpawnTime =
+          this.timeSinceStart + this.randomRange(this.intervalMinSec, this.intervalMaxSec);
+      }
+    }
+
+    if (this.enemySpawnTimesSec && this.enemySpawnTimesSec.length > 0) {
+      while (
+        this.enemySpawnIndex < this.enemySpawnTimesSec.length &&
+        this.timeSinceStart >= this.enemySpawnTimesSec[this.enemySpawnIndex]
+      ) {
+        this.spawnEnemy();
+        this.enemySpawnIndex++;
+      }
+    } else {
+      if (this.enemyPrefab && this.timeSinceStart >= this.nextEnemySpawnTime) {
+        this.spawnEnemy();
+        this.nextEnemySpawnTime =
+          this.timeSinceStart + this.randomRange(this.intervalMinSec, this.intervalMaxSec);
+      }
+    }
   }
 
   private checkCollisions() {
@@ -136,7 +236,17 @@ export class ObstacleSpawner extends Component {
     const pBottom = pPos.y - pH / 2 + this.playerHitboxShrinkY;
     const pTop = pPos.y + pH / 2 - this.playerHitboxShrinkY;
 
-    for (const obs of this.obstacles) {
+    const hazards: Node[] = [];
+    for (const o of this.obstacles) {
+      const valid = o && (o as any).isValid !== false;
+      if (valid) hazards.push(o);
+    }
+    for (const e of this.enemies) {
+      const valid = e && (e as any).isValid !== false;
+      if (valid) hazards.push(e);
+    }
+
+    for (const obs of hazards) {
       const obsUi = obs.getComponent(UITransform);
       if (!obsUi) continue;
 
@@ -158,10 +268,26 @@ export class ObstacleSpawner extends Component {
   private onPlayerHit() {
     this.lives--;
     this.invincibilityTimer = this.invincibilityDurationSec;
-    console.log(`[ObstacleSpawner] Игрок получил урон! Жизней: ${this.lives}/${this.maxLives}`);
+    this.updateHearts();
+    if (this.playerNode) {
+      const pj = this.playerNode.getComponent(PlayerJump);
+      pj?.triggerDamage();
+    }
 
     if (this.lives <= 0) {
       this.onGameOver();
+    }
+  }
+
+  private updateHearts() {
+    for (let i = 0; i < this.heartNodes.length; i++) {
+      const heart = this.heartNodes[i];
+      if (!heart) continue;
+      const opacity = heart.getComponent(UIOpacity);
+      if (!opacity) continue;
+
+      const heartIndex = this.heartNodes.length - 1 - i;
+      opacity.opacity = heartIndex >= this.lives ? this.lostHeartOpacity : 255;
     }
   }
 

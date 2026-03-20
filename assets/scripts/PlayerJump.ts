@@ -1,4 +1,16 @@
-import { _decorator, Component, Node, Vec3, input, Input, EventTouch, EventMouse } from 'cc';
+import {
+  _decorator,
+  Component,
+  Node,
+  Vec3,
+  input,
+  Input,
+  EventTouch,
+  EventMouse,
+  Animation,
+  Sprite,
+  Color,
+} from 'cc';
 const { ccclass, property } = _decorator;
 
 @ccclass('PlayerJump')
@@ -15,14 +27,46 @@ export class PlayerJump extends Component {
   @property({ tooltip: 'Разрешить прыжок только когда игрок на земле' })
   singleJumpOnly = true;
 
+  @property({ tooltip: 'Имя анимации idle в компоненте Animation' })
+  idleAnim = 'idle';
+
+  @property({ tooltip: 'Имя анимации run в компоненте Animation' })
+  runAnim = 'run';
+
+  @property({ tooltip: 'Имя анимации jump в компоненте Animation' })
+  jumpAnim = 'jump';
+
   private velocityY = 0;
   private fixedX = 0;
   private fixedZ = 0;
   private isGrounded = true;
 
+  private anim: Animation | null = null;
+  private currentAnim = '';
+  private hasStarted = false;
+  private damageTimer = 0;
+
+  private sprite: Sprite | null = null;
+  private baseColor: Color | null = null;
+
+  @property({ tooltip: 'Цвет урона (на время неуязвимости)' })
+  damageColor = new Color(255, 0, 0, 255);
+
+  @property({ tooltip: 'Сколько секунд игрок будет красным после урона' })
+  damageFlashDurationSec = 0.35;
+
   start() {
     this.fixedX = this.node.position.x;
     this.fixedZ = this.node.position.z;
+
+    this.anim = this.node.getComponent(Animation);
+    this.playAnim(this.idleAnim);
+
+    this.sprite = this.node.getComponent(Sprite);
+    if (this.sprite) {
+      const c = this.sprite.color;
+      this.baseColor = new Color(c.r, c.g, c.b, c.a);
+    }
 
     if (this.groundY === 0) {
       this.groundY = this.node.position.y;
@@ -50,10 +94,26 @@ export class PlayerJump extends Component {
 
     this.velocityY = this.jumpVelocity;
     this.isGrounded = false;
+    this.hasStarted = true;
+    this.playAnim(this.jumpAnim);
   }
 
   update(dt: number) {
-    if (this.isGrounded && this.velocityY <= 0) return;
+    if (this.damageTimer > 0) {
+      this.damageTimer -= dt;
+      if (this.damageTimer <= 0) {
+        this.damageTimer = 0;
+        if (this.sprite && this.baseColor) {
+          this.sprite.color = this.baseColor;
+        }
+      }
+    }
+
+    if (this.isGrounded && this.velocityY <= 0) {
+      if (this.hasStarted) this.playAnim(this.runAnim);
+      else this.playAnim(this.idleAnim);
+      return;
+    }
 
     this.velocityY -= this.gravity * dt;
 
@@ -66,5 +126,23 @@ export class PlayerJump extends Component {
     }
 
     this.node.setPosition(new Vec3(this.fixedX, newY, this.fixedZ));
+
+    if (!this.isGrounded) this.playAnim(this.jumpAnim);
+    else if (this.hasStarted) this.playAnim(this.runAnim);
+    else this.playAnim(this.idleAnim);
+  }
+
+  private playAnim(name: string) {
+    if (!this.anim) return;
+    if (!name) return;
+    if (this.currentAnim === name) return;
+    this.currentAnim = name;
+    this.anim.play(name);
+  }
+
+  public triggerDamage(durationSec?: number) {
+    this.damageTimer = durationSec ?? this.damageFlashDurationSec;
+    this.hasStarted = true;
+    if (this.sprite) this.sprite.color = this.damageColor;
   }
 }
