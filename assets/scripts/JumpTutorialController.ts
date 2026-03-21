@@ -13,6 +13,7 @@ import {
   Input,
   EventTouch,
   EventMouse,
+  view,
 } from 'cc';
 import { GamePause, TUTORIAL_JUMP_DONE } from './GamePause';
 import { PlayerJump } from './PlayerJump';
@@ -23,6 +24,12 @@ const { ccclass, property } = _decorator;
 export class JumpTutorialController extends Component {
   @property({ tooltip: 'Через сколько секунд после старта уровня (после Tap to start) показать туториал прыжка' })
   tutorialDelaySec = 3;
+
+  @property({
+    tooltip:
+      'Дополнительные секунды к задержке в горизонтали (видимая ширина > высоты). Итог: tutorialDelaySec + это значение.',
+  })
+  tutorialDelayExtraLandscapeSec = 2.5;
 
   @property({ tooltip: 'UUID префаба tapToStart (assets/prefabs/tapToStart.prefab)' })
   tapToStartPrefabUuid = 'e2bb0059-66b2-4c43-b258-5162b82fbbf5';
@@ -86,6 +93,14 @@ export class JumpTutorialController extends Component {
 
   public isTutorialCompleted(): boolean {
     return this.jumpTutorialCompleted;
+  }
+
+  /** Задержка до показа туториала с учётом ориентации (в альбоме дольше). */
+  public getEffectiveTutorialDelaySec(): number {
+    const vs = view.getVisibleSize();
+    const landscape = vs.width > vs.height;
+    const extra = landscape ? Math.max(0, this.tutorialDelayExtraLandscapeSec) : 0;
+    return this.tutorialDelaySec + extra;
   }
 
   public requestBeginFromGameClock(): void {

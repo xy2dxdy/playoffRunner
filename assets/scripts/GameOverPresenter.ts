@@ -9,6 +9,9 @@ import {
   Vec3,
   assetManager,
 } from 'cc';
+import { CollectibleSpawner } from './CollectibleSpawner';
+import { GameEndOverlayHider } from './GameEndOverlayHider';
+import { WinPackshotRewardReveal } from './WinPackshotRewardReveal';
 
 const { ccclass, property } = _decorator;
 
@@ -99,6 +102,7 @@ export class GameOverPresenter extends Component {
   }
 
   private runFailAnimation(): void {
+    GameEndOverlayHider.hideOnCanvas(this.node);
     const failRoot = instantiate(this.failPrefab!);
     failRoot.parent = this.node;
     failRoot.setPosition(new Vec3(0, 0, 0));
@@ -141,6 +145,18 @@ export class GameOverPresenter extends Component {
     pack.parent = this.node;
     pack.setPosition(new Vec3(0, 0, 0));
     pack.setSiblingIndex(this.node.children.length - 1);
+    const stats = this.readCollectibleStatsFromCanvas();
+    pack.getComponent(WinPackshotRewardReveal)?.setRuntimeTotals(stats.dollars, stats.coins);
     this.sequenceActive = false;
+  }
+
+  private readCollectibleStatsFromCanvas(): { dollars: number; coins: number } {
+    const canvas = this.node;
+    const sp =
+      canvas.getComponent(CollectibleSpawner) ?? canvas.getComponentInChildren(CollectibleSpawner);
+    return {
+      dollars: sp?.getDollarTotal() ?? 0,
+      coins: sp?.getCollectedCount() ?? 0,
+    };
   }
 }

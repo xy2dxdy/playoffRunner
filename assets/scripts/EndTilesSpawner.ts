@@ -138,4 +138,23 @@ export class EndTilesSpawner extends Component {
     if (i < ys.length) return ys[i];
     return ys[ys.length - 1];
   }
+
+  /** См. CollectibleSpawner.syncScrollWorldXAfterReflow — те же worldX вне objectsWorldX скроллера */
+  public syncScrollWorldXAfterReflow(deltaBg: number, prevWorldScale: number, newWorldScale: number) {
+    const scroller = this.worldScroller;
+    if (!scroller) return;
+
+    const wox = scroller.getWorldOffsetX();
+    const scaleChanged =
+      prevWorldScale !== newWorldScale && prevWorldScale !== 0 && newWorldScale !== 0;
+    const ratio = scaleChanged ? prevWorldScale / newWorldScale : 1;
+
+    for (const [, data] of this.active.entries()) {
+      let wx = data.worldX + deltaBg;
+      if (ratio !== 1) {
+        wx = wox + (wx - wox) * ratio;
+      }
+      data.worldX = wx;
+    }
+  }
 }

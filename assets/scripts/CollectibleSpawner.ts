@@ -6,12 +6,14 @@ import {
   instantiate,
   Label,
   UITransform,
+  UIOpacity,
   Vec3,
   tween,
   Tween,
 } from 'cc';
 import { RunnerWorldScroller } from './RunnerWorldScroller';
 import { GamePause } from './GamePause';
+import { WinPresenter } from './WinPresenter';
 const { ccclass, property } = _decorator;
 
 type ActiveCollectible = {
@@ -93,6 +95,42 @@ export class CollectibleSpawner extends Component {
   @property({ tooltip: 'Сужение хитбокса предмета по Y с каждой стороны (px)' })
   collectibleHitboxShrinkY = 8;
 
+  @property({
+    type: [Prefab],
+    tooltip: 'Строки из assets/prefabs/strings — случайная при срабатывании (не на первые N подборов)',
+  })
+  stringPopupPrefabs: Prefab[] = [];
+
+  @property({
+    type: Node,
+    tooltip: 'Родитель для всплывающей строки (по умолчанию — parent flyTargetNode)',
+  })
+  stringPopupParent: Node | null = null;
+
+  @property({ tooltip: 'Не показывать строку на первые столько успешных подборов' })
+  stringPopupSkipFirstPickups = 2;
+
+  @property({ tooltip: 'Вероятность показа после порога (0–1)' })
+  stringPopupChance = 0.45;
+
+  @property({ tooltip: 'Длительность появления по скейлу (сек)' })
+  stringPopupScaleInSec = 0.28;
+
+  @property({ tooltip: 'Пауза перед уходом вверх (сек)' })
+  stringPopupHoldSec = 2;
+
+  @property({ tooltip: 'Длительность движения вверх и затухания (сек)' })
+  stringPopupFloatSec = 0.75;
+
+  @property({ tooltip: 'Смещение вверх за фазу ухода (px в локали родителя)' })
+  stringPopupFloatUpPx = 140;
+
+  @property({ tooltip: 'Доп. смещение от центра экрана по X (px в локали родителя)' })
+  stringPopupOffsetX = 0;
+
+  @property({ tooltip: 'Доп. смещение от центра экрана по Y (px в локали родителя)' })
+  stringPopupOffsetY = 0;
+
   private timeSinceStart = 0;
   private spawnIndex = 0;
   private active = new Map<Node, ActiveCollectible>();
@@ -100,6 +138,8 @@ export class CollectibleSpawner extends Component {
   private successfulPickups = 0;
   private flyTargetBaseScale: Vec3 | null = null;
   private warnedNoLayer = false;
+  /** Пока на экране — новый string popup не спавним */
+  private stringPopupNode: Node | null = null;
 
   start() {
     if (this.flyTargetNode) {
@@ -286,6 +326,101 @@ export class CollectibleSpawner extends Component {
     }
   }
 
+  private maybeShowPickupStringPopup() {
+    const prefabs = this.stringPopupPrefabs;
+    if (!prefabs.length) return;
+    if (this.successfulPickups <= this.stringPopupSkipFirstPickups) return;
+    if (Math.random() > this.stringPopupChance) return;
+
+    if (this.stringPopupNode?.isValid) return;
+    this.stringPopupNode = null;
+
+    const anchor = this.flyTargetNode ?? this.playerNode ?? this.node;
+    const canvas = WinPresenter.getCanvasFromNode(anchor);
+    if (!canvas) return;
+
+    const centerWorld = this.getCanvasCenterWorld(canvas);
+    if (!centerWorld) return;
+
+    const parent =
+      this.stringPopupParent ?? this.flyTargetNode?.parent ?? this.playerNode?.parent;
+    if (!parent) return;
+
+    const prefab = prefabs[Math.floor(Math.random() * prefabs.length)];
+    if (!prefab) return;
+
+    const node = instantiate(prefab);
+    const parentUi = parent.getComponent(UITransform);
+    if (!parentUi) {
+      node.destroy();
+      return;
+    }
+
+    node.setParent(parent);
+    node.setSiblingIndex(parent.children.length - 1);
+    this.stringPopupNode = node;
+
+    const local = new Vec3();
+    parentUi.convertToNodeSpaceAR(centerWorld, local);
+    local.x += this.stringPopupOffsetX;
+    local.y += this.stringPopupOffsetY;
+    node.setPosition(local);
+
+    const opacity = node.getComponent(UIOpacity) ?? node.addComponent(UIOpacity);
+    opacity.opacity = 255;
+
+    const endScale = node.scale.clone();
+    const sx = Math.sign(endScale.x) || 1;
+    const sy = Math.sign(endScale.y) || 1;
+    const fromScale = new Vec3(0.02 * sx, 0.02 * sy, endScale.z);
+    node.setScale(fromScale);
+
+    Tween.stopAllByTarget(node);
+    Tween.stopAllByTarget(opacity);
+
+    const endPos = local.clone();
+    endPos.y += this.stringPopupFloatUpPx;
+
+    const floatSec = this.stringPopupFloatSec;
+
+    tween(node)
+      .to(this.stringPopupScaleInSec, { scale: endScale }, { easing: 'backOut' })
+      .delay(this.stringPopupHoldSec)
+      .call(() => {
+        let partsDone = 0;
+        const onFloatDone = () => {
+          partsDone++;
+          if (partsDone >= 2 && node.isValid) {
+            if (this.stringPopupNode === node) this.stringPopupNode = null;
+            node.destroy();
+          }
+        };
+        tween(node)
+          .to(floatSec, { position: endPos }, { easing: 'quadOut' })
+          .call(onFloatDone)
+          .start();
+        tween(opacity)
+          .to(floatSec, { opacity: 0 }, { easing: 'quadOut' })
+          .call(onFloatDone)
+          .start();
+      })
+      .start();
+  }
+
+  /** Геометрический центр Canvas в мировых координатах (для UI по центру экрана). */
+  private getCanvasCenterWorld(canvas: Node): Vec3 | null {
+    const ui = canvas.getComponent(UITransform);
+    if (!ui) return null;
+    const w = ui.contentSize.width;
+    const h = ui.contentSize.height;
+    const ax = ui.anchorX;
+    const ay = ui.anchorY;
+    const localCenter = new Vec3((0.5 - ax) * w, (0.5 - ay) * h, 0);
+    const out = new Vec3();
+    ui.convertToWorldSpaceAR(localCenter, out);
+    return out;
+  }
+
   private pulseFlyTarget() {
     const n = this.flyTargetNode;
     if (!n) return;
@@ -312,6 +447,7 @@ export class CollectibleSpawner extends Component {
       this.successfulPickups++;
       this.refreshDollarLabel();
       this.pulseFlyTarget();
+      this.maybeShowPickupStringPopup();
     }
 
     if (node && (node as any).isValid !== false) {
@@ -325,5 +461,28 @@ export class CollectibleSpawner extends Component {
 
   public getCollectedCount(): number {
     return this.successfulPickups;
+  }
+
+  /**
+   * Вызывается из RunnerWorldScroller.reflowFromCanvasSize: монеты хранят worldX отдельно от objectsWorldX,
+   * иначе при повороте/ресайзе не применяется deltaBg и пересчёт при смене worldScale — монета «уезжает» по X.
+   */
+  public syncScrollWorldXAfterReflow(deltaBg: number, prevWorldScale: number, newWorldScale: number) {
+    const scroller = this.worldScroller;
+    if (!scroller) return;
+
+    const wox = scroller.getWorldOffsetX();
+    const scaleChanged =
+      prevWorldScale !== newWorldScale && prevWorldScale !== 0 && newWorldScale !== 0;
+    const ratio = scaleChanged ? prevWorldScale / newWorldScale : 1;
+
+    for (const [, data] of this.active.entries()) {
+      if (data.flying) continue;
+      let wx = data.worldX + deltaBg;
+      if (ratio !== 1) {
+        wx = wox + (wx - wox) * ratio;
+      }
+      data.worldX = wx;
+    }
   }
 }

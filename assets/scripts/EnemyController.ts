@@ -15,12 +15,14 @@ export class EnemyController extends Component {
   private pauseSynced = false;
 
   start() {
-    this.tryInitLimits();
+    this.updateLeftLimitFromCanvas();
     this.syncAnimationWithGlobalPause();
   }
 
-  private tryInitLimits() {
-    const ui = this.node.getComponentInParent(UITransform);
+  /** Ширина экрана — у Canvas (родитель). Иначе getComponentInParent часто берёт UITransform самого врага (ширина спрайта), и граница сброса неверная. */
+  private updateLeftLimitFromCanvas() {
+    const canvasUi = this.node.parent?.getComponent(UITransform);
+    const ui = canvasUi ?? this.node.getComponentInParent(UITransform);
     if (ui) {
       const w = ui.contentSize.width;
       this.leftLimitX = -w / 2 - this.offscreenMargin;
@@ -39,6 +41,8 @@ export class EnemyController extends Component {
   }
 
   update(dt: number) {
+    this.updateLeftLimitFromCanvas();
+
     const paused = GamePause.paused;
     if (paused !== this.pauseSynced) {
       const anim = this.node.getComponent(Animation);

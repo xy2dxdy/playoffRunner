@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Prefab, instantiate, UITransform, UIOpacity, Vec3 } from 'cc';
+import { _decorator, Component, Node, Prefab, instantiate, UITransform, UIOpacity, Vec3, view } from 'cc';
 import { EnemyController } from './EnemyController';
 import { PlayerJump } from './PlayerJump';
 import { GamePause } from './GamePause';
@@ -55,6 +55,11 @@ export class ObstacleSpawner extends Component {
   @property({ tooltip: 'Марджин за левым краем для врага (px).' })
   enemyOffscreenMargin = 200;
 
+  @property({
+    tooltip: 'Отступ спавна препятствий/врагов за правым краем (px). Одинаков в портрете и альбоме.',
+  })
+  hazardSpawnMarginPx = 140;
+
   @property({ tooltip: 'Сколько жизней у игрока' })
   maxLives = 3;
 
@@ -96,6 +101,15 @@ export class ObstacleSpawner extends Component {
     GameOverPresenter.attach(this.node);
     WinPresenter.attach(this.node);
     EndTilesSpawner.attach(this.node);
+    view.on('canvas-resize', this._onCanvasResize, this);
+  }
+
+  onDestroy() {
+    view.off('canvas-resize', this._onCanvasResize, this);
+  }
+
+  private _onCanvasResize() {
+    this.refreshCanvasWidth();
   }
 
   start() {
@@ -107,10 +121,32 @@ export class ObstacleSpawner extends Component {
     this.obstacleSpawnIndex = 0;
     this.enemySpawnIndex = 0;
 
-    const canvasUi = this.node.getComponent(UITransform);
-    if (canvasUi) {
-      this.canvasWidth = canvasUi.contentSize.width;
+    this.refreshCanvasWidth();
+  }
+
+  private refreshCanvasWidth() {
+    const vs = view.getVisibleSize();
+    if (vs.width > 0) {
+      this.canvasWidth = vs.width;
+      return;
     }
+    const canvasUi = this.node.getComponent(UITransform);
+    if (canvasUi && canvasUi.contentSize.width > 0) {
+      this.canvasWidth = canvasUi.contentSize.width;
+    } else if (this.canvasWidth <= 0) {
+      const dr = view.getDesignResolutionSize();
+      this.canvasWidth = dr.width;
+    }
+  }
+
+  /** Правый край + фиксированный отступ в px — время выхода в зону видимости не зависит от ориентации. */
+  private getHazardSpawnX(): number {
+    const half = this.canvasWidth * 0.5;
+    const x = half + this.hazardSpawnMarginPx;
+    if (!Number.isFinite(x)) {
+      return half + 120;
+    }
+    return x;
   }
 
   private gameOver = false;
@@ -119,13 +155,14 @@ export class ObstacleSpawner extends Component {
     if (GamePause.paused) return;
     if (this.gameOver) return;
 
+    this.refreshCanvasWidth();
     this.moveAndCleanHazards(dt);
 
     this.timeSinceStart += dt;
 
     const tutorial = this.node.getComponent(JumpTutorialController);
     if (tutorial && !tutorial.isTutorialCompleted()) {
-      if (this.timeSinceStart >= tutorial.tutorialDelaySec) {
+      if (this.timeSinceStart >= tutorial.getEffectiveTutorialDelaySec()) {
         tutorial.requestBeginFromGameClock();
       }
     }
@@ -150,7 +187,7 @@ export class ObstacleSpawner extends Component {
     node.parent = this.node;
     this.placeHazardBehindPlayer(node);
 
-    const spawnX = this.canvasWidth / 2 + 100;
+    const spawnX = this.getHazardSpawnX();
     node.setPosition(new Vec3(spawnX, this.obstacleY, 0));
     this.obstacles.push(node);
   }
@@ -162,7 +199,7 @@ export class ObstacleSpawner extends Component {
     node.parent = this.node;
     this.placeHazardBehindPlayer(node);
 
-    const spawnX = this.canvasWidth / 2 + 100;
+    const spawnX = this.getHazardSpawnX();
     node.setPosition(new Vec3(spawnX, this.enemyY, 0));
     const controller = node.getComponent(EnemyController) ?? node.addComponent(EnemyController);
     if (controller) {

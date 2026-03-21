@@ -1,6 +1,10 @@
-import { _decorator, Component, Node, Prefab, instantiate, UITransform, Vec3, Sprite } from 'cc';
+import { _decorator, Node, Prefab, instantiate, Size, UITransform, Vec3, Sprite, view } from 'cc';
 import { GamePause } from './GamePause';
-const { ccclass, property } = _decorator;
+import { DynamicUI } from './layout/DynamicUI';
+import { GameOrientation } from './layout/GameOrientation';
+import { CollectibleSpawner } from './CollectibleSpawner';
+import { EndTilesSpawner } from './EndTilesSpawner';
+const { ccclass, executionOrder, property } = _decorator;
 
 type BgTile = {
   node: Node;
@@ -8,8 +12,10 @@ type BgTile = {
   segmentIndex: number;
 };
 
+/** После CanvasResizer: initBackground видит финальный contentSize после SHOW_ALL. */
+@executionOrder(50)
 @ccclass('RunnerWorldScroller')
-export class RunnerWorldScroller extends Component {
+export class RunnerWorldScroller extends DynamicUI {
   @property({ type: Prefab, tooltip: 'Префаб фона (bg), который будет скроллиться влево' })
   bgPrefab: Prefab | null = null;
 
@@ -61,6 +67,18 @@ export class RunnerWorldScroller extends Component {
   @property({ tooltip: 'Смещение X куста относительно не-куста (max, px)' })
   bushRelativeMaxPx = 140;
 
+  @property({
+    tooltip:
+      'Доп. плитки фона поверх ceil(ширина/тайл)+2. Увеличьте в широком альбоме, если слева/справа видна «дыра».',
+  })
+  bgExtraTileBuffer = 2;
+
+  @property({
+    tooltip:
+      'Сдвиг ленты фона влево на столько ширин плитки; столько же доп. плиток добавляется к охвату по X (портрет и альбом).',
+  })
+  bgStartTileOffsetLeft = 1;
+
   private canvasWidth = 0;
   private canvasHeight = 0;
   private worldScale = 1;
@@ -88,6 +106,183 @@ export class RunnerWorldScroller extends Component {
 
   private lastNonBushCategory: 'tree' | 'flashlight' | null = null;
   private eventsSinceLastBush = 0;
+
+  /** Высота спрайта фона × |scaleY| — для пересчёта worldScale при ресайзе */
+  private bgVisualBaseHeight = 0;
+  private bgTileY = 0;
+  private bgBaseScaleY = 1;
+  private bgBaseScaleZ = 1;
+
+  private _resizeQueued = false;
+
+  /** Сдвиг ленты влево на N тайлов (и столько же доп. плиток в пуле). */
+  private getEffectiveBgStartTileOffsetLeft(): number {
+    if (this.canvasWidth <= 0 || this.canvasHeight <= 0) return 0;
+    return Math.max(0, Math.floor(this.bgStartTileOffsetLeft));
+  }
+
+  /**
+   * Сколько плиток держать в пуле. Сетка сдвинута влево — нужна ещё одна плитка по охвату по X.
+   */
+  private computeTilesNeeded(localCanvasWidth: number): number {
+    const base = Math.ceil(localCanvasWidth / this.bgTileWidthPx) + 2 + this.bgExtraTileBuffer;
+    return base + this.getEffectiveBgStartTileOffsetLeft();
+  }
+
+  /**
+   * Размер Canvas UITransform при повороте/ресайзе иногда отстаёт от реального viewport.
+   * Для скролла и leftEdge/rightEdge используем видимую область — иначе слева/справа «дыра» в чёрный clear.
+   */
+  private syncCanvasDimensionsFromView(): void {
+    const vs = view.getVisibleSize();
+    this.canvasWidth = vs.width;
+    this.canvasHeight = vs.height;
+  }
+
+  protected override onLoad(): void {
+    super.onLoad();
+    view.on('canvas-resize', this._onViewCanvasResize, this);
+  }
+
+  protected override onDestroy(): void {
+    view.off('canvas-resize', this._onViewCanvasResize, this);
+    super.onDestroy();
+  }
+
+  private _onViewCanvasResize() {
+    this.queueCanvasReflow();
+  }
+
+  /** Один пересчёт за кадр: и от CanvasResizer (DynamicUI), и от view */
+  private queueCanvasReflow() {
+    if (this._resizeQueued) return;
+    this._resizeQueued = true;
+    this.scheduleOnce(() => {
+      this._resizeQueued = false;
+      this.reflowFromCanvasSize();
+    }, 0);
+  }
+
+  public override onResize(s: Size = new Size()): void {
+    super.onResize(s);
+    this.queueCanvasReflow();
+  }
+
+  /**
+   * Подгоняет масштаб корня мира, края экрана и плитки фона под текущий UITransform Canvas
+   * (поворот, смена размера окна, политика разрешения из CanvasResizer).
+   */
+  private reflowFromCanvasSize() {
+    if (!this.bgPrefab || this.objectPrefabs.length === 0) return;
+    if (!this.worldRoot || this.bgTileWidthPx <= 0 || this.bgVisualBaseHeight <= 0) return;
+
+    const canvasUi = this.node.getComponent(UITransform);
+    if (!canvasUi) return;
+
+    const prevWorldScale = this.worldScale;
+    const oldBgStart = this.bgStartWorldX;
+
+    this.syncCanvasDimensionsFromView();
+
+    const worldScale =
+      this.bgVisualBaseHeight > 0 ? this.canvasHeight / this.bgVisualBaseHeight : 1;
+    this.worldScale = worldScale;
+
+    const localCanvasWidth = this.worldScale !== 0 ? this.canvasWidth / this.worldScale : this.canvasWidth;
+    this.leftEdge = -localCanvasWidth / 2;
+    this.rightEdge = localCanvasWidth / 2;
+
+    const firstWorldX =
+      this.leftEdge +
+      this.bgTileWidthPx / 2 -
+      this.bgTileWidthPx * this.getEffectiveBgStartTileOffsetLeft();
+    const newBgStart = firstWorldX;
+    const deltaBg = newBgStart - oldBgStart;
+
+    this.worldOffsetX += deltaBg;
+    this.nextNonBushSpawnWorldX += deltaBg;
+
+    for (const node of this.objectsWorldX.keys()) {
+      const wx = this.objectsWorldX.get(node)! + deltaBg;
+      this.objectsWorldX.set(node, wx);
+    }
+
+    this.rescaleScrollWorldXAfterScaleChange(prevWorldScale, this.worldScale);
+
+    this.node.getComponent(CollectibleSpawner)?.syncScrollWorldXAfterReflow(deltaBg, prevWorldScale, this.worldScale);
+    this.node.getComponent(EndTilesSpawner)?.syncScrollWorldXAfterReflow(deltaBg, prevWorldScale, this.worldScale);
+
+    this.bgStartWorldX = newBgStart;
+
+    if (!this.useCustomGroundY) {
+      const tmp = instantiate(this.objectPrefabs[0]);
+      const bottomY = this.computeVisualBottomLocalY(tmp);
+      const rawGround = bottomY ?? tmp.position.y;
+      tmp.destroy();
+      this.groundY = rawGround / this.worldScale;
+    }
+
+    this.worldRoot.setScale(this.worldScale, this.worldScale, 1);
+
+    const tilesNeeded = this.computeTilesNeeded(localCanvasWidth);
+
+    if (tilesNeeded > this.bgTiles.length) {
+      const maxSeg = Math.max(...this.bgTiles.map((t) => t.segmentIndex));
+      const add = tilesNeeded - this.bgTiles.length;
+      for (let k = 0; k < add; k++) {
+        const segIdx = maxSeg + 1 + k;
+        const worldX = this.bgStartWorldX + segIdx * this.bgTileWidthPx;
+        const tileNode = instantiate(this.bgPrefab as Prefab);
+        tileNode.parent = this.worldRoot;
+        tileNode.setPosition(new Vec3(worldX - this.worldOffsetX, this.bgTileY, 0));
+        const mirror = segIdx % 2 === 1;
+        tileNode.setScale(mirror ? -this.bgAbsScaleX : this.bgAbsScaleX, this.bgBaseScaleY, this.bgBaseScaleZ);
+        this.bgTiles.push({ node: tileNode, worldX, segmentIndex: segIdx });
+      }
+    } else if (tilesNeeded < this.bgTiles.length) {
+      const toRemove = this.bgTiles.length - tilesNeeded;
+      this.bgTiles.sort((a, b) => b.segmentIndex - a.segmentIndex);
+      for (let i = 0; i < toRemove; i++) {
+        const t = this.bgTiles[0];
+        t.node.destroy();
+        this.bgTiles.shift();
+      }
+    }
+
+    this.bgTilesCount = this.bgTiles.length;
+
+    for (const tile of this.bgTiles) {
+      tile.worldX = this.bgStartWorldX + tile.segmentIndex * this.bgTileWidthPx;
+      const canvasX = tile.worldX - this.worldOffsetX;
+      tile.node.setPosition(new Vec3(canvasX, this.bgTileY, tile.node.position.z));
+      const mirror = tile.segmentIndex % 2 === 1;
+      const s = tile.node.scale;
+      tile.node.setScale(mirror ? -this.bgAbsScaleX : this.bgAbsScaleX, s.y, s.z);
+    }
+
+    const yOffset = this.toLocalX(this.objectsYOffsetPx);
+    for (const [node, worldX] of this.objectsWorldX.entries()) {
+      const canvasX = worldX - this.worldOffsetX;
+      const centerY = this.computeCenterYForBottomLocal(this.groundY + yOffset, node);
+      node.setPosition(new Vec3(canvasX, centerY, node.position.z));
+    }
+
+    GameOrientation.setResize(new Size(this.canvasWidth, this.canvasHeight));
+  }
+
+  /**
+   * При смене worldScale экранная X координата (local × scale) меняется при том же canvasX.
+   * Сдвигаем worldX относительно worldOffsetX, чтобы сохранить положение на экране. Плитки фона не трогаем.
+   */
+  private rescaleScrollWorldXAfterScaleChange(prevWorldScale: number, newWorldScale: number) {
+    if (prevWorldScale === newWorldScale || prevWorldScale === 0 || newWorldScale === 0) return;
+    const ratio = prevWorldScale / newWorldScale;
+    const wox = this.worldOffsetX;
+    for (const [node, wx] of this.objectsWorldX.entries()) {
+      this.objectsWorldX.set(node, wox + (wx - wox) * ratio);
+    }
+    this.nextNonBushSpawnWorldX = wox + (this.nextNonBushSpawnWorldX - wox) * ratio;
+  }
 
   private toLocalX(screenPx: number) {
     return this.worldScale !== 0 ? screenPx / this.worldScale : screenPx;
@@ -139,8 +334,7 @@ export class RunnerWorldScroller extends Component {
     const canvasUi = this.node.getComponent(UITransform);
     if (!canvasUi) return;
 
-    this.canvasWidth = canvasUi.contentSize.width;
-    this.canvasHeight = canvasUi.contentSize.height;
+    this.syncCanvasDimensionsFromView();
     this.leftEdge = -this.canvasWidth / 2;
     this.rightEdge = this.canvasWidth / 2;
 
@@ -172,6 +366,9 @@ export class RunnerWorldScroller extends Component {
     }
 
     this.initObstacles();
+
+    // После всех компонентов Canvas (в т.ч. CanvasResizer) подтянуть размеры к финальному design resolution
+    this.scheduleOnce(() => this.reflowFromCanvasSize(), 0);
   }
 
   private initBackground() {
@@ -189,13 +386,17 @@ export class RunnerWorldScroller extends Component {
     this.bgAbsScaleX = Math.abs(firstTile.scale.x);
 
     const visualBaseHeight = baseHeight > 0 ? baseHeight * Math.abs(firstTile.scale.y) : 0;
+    this.bgVisualBaseHeight = visualBaseHeight;
     const worldScale = visualBaseHeight > 0 ? this.canvasHeight / visualBaseHeight : 1;
     this.worldScale = worldScale;
 
     this.bgTileWidthPx = baseWidth * this.bgAbsScaleX;
     const tileY = firstTile.position.y;
+    this.bgTileY = tileY;
     const baseScaleY = firstTile.scale.y;
     const baseScaleZ = firstTile.scale.z;
+    this.bgBaseScaleY = baseScaleY;
+    this.bgBaseScaleZ = baseScaleZ;
     firstTile.destroy();
 
     if (this.bgTileWidthPx <= 0) return;
@@ -204,9 +405,12 @@ export class RunnerWorldScroller extends Component {
     this.leftEdge = -localCanvasWidth / 2;
     this.rightEdge = localCanvasWidth / 2;
 
-    const tilesNeeded = Math.ceil(localCanvasWidth / this.bgTileWidthPx) + 2;
+    const tilesNeeded = this.computeTilesNeeded(localCanvasWidth);
     this.bgTilesCount = tilesNeeded;
-    const firstWorldX = this.leftEdge + this.bgTileWidthPx / 2;
+    const firstWorldX =
+      this.leftEdge +
+      this.bgTileWidthPx / 2 -
+      this.bgTileWidthPx * this.getEffectiveBgStartTileOffsetLeft();
     this.bgStartWorldX = firstWorldX;
 
     const bgRoot = new Node('bgRoot');
@@ -455,6 +659,7 @@ export class RunnerWorldScroller extends Component {
     return a + Math.random() * (b - a);
   }
 
+  /** Одинаковый запас в экранных px в любой ориентации → совпадает тайминг очереди спавна. */
   private getSpawnAheadPx() {
     const aheadScreenPx = Math.max(this.spawnXMarginPx, this.scrollSpeed * this.prefetchSeconds);
     return this.toLocalX(aheadScreenPx);
