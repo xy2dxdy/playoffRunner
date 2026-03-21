@@ -1,4 +1,5 @@
 import { _decorator, Component, Node, Prefab, instantiate, Vec3, assetManager, find } from 'cc';
+import { ConfettiPlayer } from './ConfettiPlayer';
 
 const { ccclass, property } = _decorator;
 
@@ -9,6 +10,12 @@ export class WinPresenter extends Component {
 
   @property({ tooltip: 'UUID assets/prefabs/packshotWin.prefab' })
   packshotWinPrefabUuid = '3090269d-7e99-45e1-b652-c20109d36673';
+
+  @property({ type: Prefab, tooltip: 'Переопределение confettiShot.prefab' })
+  confettiShotPrefabOverride: Prefab | null = null;
+
+  @property({ tooltip: 'UUID assets/prefabs/confettiShot.prefab' })
+  confettiShotPrefabUuid = 'd1e7f7bf-9101-4e77-8cdb-4d51658c67f4';
 
   private packshotPrefab: Prefab | null = null;
   private sequenceActive = false;
@@ -51,6 +58,29 @@ export class WinPresenter extends Component {
     pack.setPosition(new Vec3(0, 0, 0));
     pack.setSiblingIndex(this.node.children.length - 1);
     this.sequenceActive = false;
+    this.spawnConfettiShot();
+  }
+
+  private spawnConfettiShot(): void {
+    if (this.confettiShotPrefabOverride) {
+      this.instantiateConfettiAndPlay(this.confettiShotPrefabOverride);
+      return;
+    }
+    if (!this.confettiShotPrefabUuid) return;
+    assetManager.loadAny<Prefab>({ uuid: this.confettiShotPrefabUuid }, (err, asset) => {
+      if (!err && asset) this.instantiateConfettiAndPlay(asset);
+    });
+  }
+
+  private instantiateConfettiAndPlay(prefab: Prefab): void {
+    const node = instantiate(prefab);
+    node.parent = this.node;
+    node.setPosition(new Vec3(0, 0, 0));
+    const s = node.scale;
+    node.setScale(new Vec3(s.x * 2, s.y * 2, s.z));
+    node.setSiblingIndex(this.node.children.length - 1);
+    const player = node.getComponent(ConfettiPlayer);
+    if (player) player.play();
   }
 
   public static getCanvasFromNode(n: Node | null): Node | null {
