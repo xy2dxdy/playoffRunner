@@ -6,11 +6,9 @@ const { ccclass, property } = _decorator;
 export class StoreController extends Component {
 
     start() {
-        const googlePlay = 'https://play.google.com/store/apps/details?id=com.evrika.yarnroll&hl=ru';
-        const appstore = 'https://apps.apple.com/app/id6453888129';
+        const googlePlay = 'https://play.google.com/store/apps/details?id=ae.goragaming.playoff.blocks.game.make.earn.money.rewarded';
 
         super_html_playable.set_google_play_url(googlePlay);
-        super_html_playable.set_app_store_url(appstore);
     }
     
 }
