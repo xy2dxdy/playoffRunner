@@ -76,6 +76,7 @@ export class RunnerWorldScroller extends Component {
   private treeLayer: Node | null = null;
   private flashlightLayer: Node | null = null;
   private bushLayer: Node | null = null;
+  private collectibleLayer: Node | null = null;
 
   private objectsWorldX = new Map<Node, number>();
   private nextNonBushSpawnWorldX = 0;
@@ -236,6 +237,50 @@ export class RunnerWorldScroller extends Component {
     this.bushLayer = new Node('bushLayer');
     this.bushLayer.setPosition(Vec3.ZERO);
     bgRoot.addChild(this.bushLayer);
+
+    this.collectibleLayer = new Node('collectibleLayer');
+    this.collectibleLayer.setPosition(Vec3.ZERO);
+    bgRoot.addChild(this.collectibleLayer);
+  }
+
+  /** Слой под монеты/бонусы — те же координаты и скролл, что у фона */
+  public getCollectibleLayer(): Node | null {
+    return this.collectibleLayer;
+  }
+
+  public getWorldOffsetX(): number {
+    return this.worldOffsetX;
+  }
+
+  public getWorldScale(): number {
+    return this.worldScale;
+  }
+
+  public getLeftEdge(): number {
+    return this.leftEdge;
+  }
+
+  public getRightEdge(): number {
+    return this.rightEdge;
+  }
+
+  public getGroundY(): number {
+    return this.groundY;
+  }
+
+  public getDespawnMarginLocal(): number {
+    return this.toLocalX(this.despawnMarginPx);
+  }
+
+  /** Смещение Y в px экрана → центр спрайта, нижний край на groundY + offset (как у деревьев) */
+  public getCollectibleCenterY(node: Node, yOffsetPx: number): number {
+    const yOffset = this.toLocalX(yOffsetPx);
+    return this.computeCenterYForBottomLocal(this.groundY + yOffset, node);
+  }
+
+  /** worldX для появления у правого края + margin (px экрана) */
+  public getSpawnWorldXAtRightEdge(screenMarginPx: number): number {
+    return this.worldOffsetX + this.rightEdge + this.toLocalX(screenMarginPx);
   }
 
   private initObstacles() {

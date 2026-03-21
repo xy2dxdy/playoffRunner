@@ -36,6 +36,9 @@ export class PlayerJump extends Component {
   @property({ tooltip: 'Имя анимации jump в компоненте Animation' })
   jumpAnim = 'jump';
 
+  @property({ tooltip: 'Имя анимации damage в компоненте Animation' })
+  damageAnim = 'damage';
+
   private velocityY = 0;
   private fixedX = 0;
   private fixedZ = 0;
@@ -109,23 +112,26 @@ export class PlayerJump extends Component {
       }
     }
 
-    if (this.isGrounded && this.velocityY <= 0) {
-      if (this.hasStarted) this.playAnim(this.runAnim);
-      else this.playAnim(this.idleAnim);
+    const needPhysics = !(this.isGrounded && this.velocityY <= 0);
+
+    if (needPhysics) {
+      this.velocityY -= this.gravity * dt;
+
+      let newY = this.node.position.y + this.velocityY * dt;
+
+      if (newY <= this.groundY) {
+        newY = this.groundY;
+        this.velocityY = 0;
+        this.isGrounded = true;
+      }
+
+      this.node.setPosition(new Vec3(this.fixedX, newY, this.fixedZ));
+    }
+
+    if (this.damageTimer > 0) {
+      this.playAnim(this.damageAnim);
       return;
     }
-
-    this.velocityY -= this.gravity * dt;
-
-    let newY = this.node.position.y + this.velocityY * dt;
-
-    if (newY <= this.groundY) {
-      newY = this.groundY;
-      this.velocityY = 0;
-      this.isGrounded = true;
-    }
-
-    this.node.setPosition(new Vec3(this.fixedX, newY, this.fixedZ));
 
     if (!this.isGrounded) this.playAnim(this.jumpAnim);
     else if (this.hasStarted) this.playAnim(this.runAnim);
@@ -144,5 +150,6 @@ export class PlayerJump extends Component {
     this.damageTimer = durationSec ?? this.damageFlashDurationSec;
     this.hasStarted = true;
     if (this.sprite) this.sprite.color = this.damageColor;
+    this.playAnim(this.damageAnim);
   }
 }
