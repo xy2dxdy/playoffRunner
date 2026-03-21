@@ -1,6 +1,11 @@
 import { _decorator, Component, Node, Prefab, instantiate, UITransform, UIOpacity, Vec3 } from 'cc';
 import { EnemyController } from './EnemyController';
 import { PlayerJump } from './PlayerJump';
+import { GamePause } from './GamePause';
+import { JumpTutorialController } from './JumpTutorialController';
+import { GameOverPresenter } from './GameOverPresenter';
+import { WinPresenter } from './WinPresenter';
+import { EndTilesSpawner } from './EndTilesSpawner';
 const { ccclass, property } = _decorator;
 
 @ccclass('ObstacleSpawner')
@@ -86,6 +91,13 @@ export class ObstacleSpawner extends Component {
   private obstacleSpawnIndex = 0;
   private enemySpawnIndex = 0;
 
+  onLoad() {
+    JumpTutorialController.attach(this.node);
+    GameOverPresenter.attach(this.node);
+    WinPresenter.attach(this.node);
+    EndTilesSpawner.attach(this.node);
+  }
+
   start() {
     this.lives = this.maxLives;
     this.invincibilityTimer = 0;
@@ -104,11 +116,21 @@ export class ObstacleSpawner extends Component {
   private gameOver = false;
 
   update(dt: number) {
-    this.moveAndCleanHazards(dt);
-
+    if (GamePause.paused) return;
     if (this.gameOver) return;
 
+    this.moveAndCleanHazards(dt);
+
     this.timeSinceStart += dt;
+
+    const tutorial = this.node.getComponent(JumpTutorialController);
+    if (tutorial && !tutorial.isTutorialCompleted()) {
+      if (this.timeSinceStart >= tutorial.tutorialDelaySec) {
+        tutorial.requestBeginFromGameClock();
+      }
+    }
+
+    if (GamePause.paused) return;
 
     if (this.invincibilityTimer > 0) {
       this.invincibilityTimer -= dt;
@@ -126,6 +148,7 @@ export class ObstacleSpawner extends Component {
 
     const node = instantiate(this.obstaclePrefab);
     node.parent = this.node;
+    this.placeHazardBehindPlayer(node);
 
     const spawnX = this.canvasWidth / 2 + 100;
     node.setPosition(new Vec3(spawnX, this.obstacleY, 0));
@@ -137,6 +160,7 @@ export class ObstacleSpawner extends Component {
 
     const node = instantiate(this.enemyPrefab);
     node.parent = this.node;
+    this.placeHazardBehindPlayer(node);
 
     const spawnX = this.canvasWidth / 2 + 100;
     node.setPosition(new Vec3(spawnX, this.enemyY, 0));
@@ -146,6 +170,12 @@ export class ObstacleSpawner extends Component {
       controller.offscreenMargin = this.enemyOffscreenMargin;
     }
     this.enemies.push(node);
+  }
+
+  private placeHazardBehindPlayer(hazard: Node) {
+    if (!this.playerNode) return;
+    const idx = this.playerNode.getSiblingIndex();
+    hazard.setSiblingIndex(idx);
   }
 
   private moveAndCleanHazards(dt: number) {
@@ -168,8 +198,6 @@ export class ObstacleSpawner extends Component {
       obs.destroy();
     }
 
-    // Враги двигаются отдельным скриптом EnemyController, поэтому тут только чистим ссылки
-    // (на случай, если узел не успел само-уничтожиться).
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
       if (!e) {
@@ -293,7 +321,12 @@ export class ObstacleSpawner extends Component {
 
   private onGameOver() {
     this.gameOver = true;
-    if (this.playerNode) this.playerNode.active = true;
+    GamePause.setPaused(true);
+    if (this.playerNode) {
+      this.playerNode.active = true;
+      this.playerNode.getComponent(PlayerJump)?.setJumpInputEnabled(false);
+    }
+    this.node.getComponent(GameOverPresenter)?.showGameOverSequence();
   }
 
   public getLives(): number {

@@ -11,6 +11,7 @@ import {
   Tween,
 } from 'cc';
 import { RunnerWorldScroller } from './RunnerWorldScroller';
+import { GamePause } from './GamePause';
 const { ccclass, property } = _decorator;
 
 type ActiveCollectible = {
@@ -108,6 +109,8 @@ export class CollectibleSpawner extends Component {
   }
 
   update(dt: number) {
+    if (GamePause.paused) return;
+
     const scroller = this.worldScroller;
     if (!scroller) return;
 
@@ -316,12 +319,10 @@ export class CollectibleSpawner extends Component {
     }
   }
 
-  /** Сумма долларов на счётчике */
   public getDollarTotal(): number {
     return this.dollarTotal;
   }
 
-  /** Сколько раз монета долетела до цели */
   public getCollectedCount(): number {
     return this.successfulPickups;
   }

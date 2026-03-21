@@ -1,4 +1,5 @@
 import { _decorator, Component, Node, Prefab, instantiate, UITransform, Vec3, Sprite } from 'cc';
+import { GamePause } from './GamePause';
 const { ccclass, property } = _decorator;
 
 type BgTile = {
@@ -243,7 +244,6 @@ export class RunnerWorldScroller extends Component {
     bgRoot.addChild(this.collectibleLayer);
   }
 
-  /** Слой под монеты/бонусы — те же координаты и скролл, что у фона */
   public getCollectibleLayer(): Node | null {
     return this.collectibleLayer;
   }
@@ -272,13 +272,11 @@ export class RunnerWorldScroller extends Component {
     return this.toLocalX(this.despawnMarginPx);
   }
 
-  /** Смещение Y в px экрана → центр спрайта, нижний край на groundY + offset (как у деревьев) */
   public getCollectibleCenterY(node: Node, yOffsetPx: number): number {
     const yOffset = this.toLocalX(yOffsetPx);
     return this.computeCenterYForBottomLocal(this.groundY + yOffset, node);
   }
 
-  /** worldX для появления у правого края + margin (px экрана) */
   public getSpawnWorldXAtRightEdge(screenMarginPx: number): number {
     return this.worldOffsetX + this.rightEdge + this.toLocalX(screenMarginPx);
   }
@@ -398,6 +396,7 @@ export class RunnerWorldScroller extends Component {
 
   update(dt: number) {
     if (!this.bgPrefab || this.bgTiles.length === 0) return;
+    if (GamePause.paused) return;
 
     this.worldOffsetX += (this.scrollSpeed / this.worldScale) * dt;
 

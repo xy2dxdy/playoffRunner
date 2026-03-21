@@ -1,4 +1,5 @@
-import { _decorator, Component, UITransform, Vec3, Node } from 'cc';
+import { _decorator, Component, UITransform, Vec3, Animation } from 'cc';
+import { GamePause } from './GamePause';
 const { ccclass, property } = _decorator;
 
 @ccclass('EnemyController')
@@ -11,9 +12,11 @@ export class EnemyController extends Component {
 
   private leftLimitX = -999999;
   private inited = false;
+  private pauseSynced = false;
 
   start() {
     this.tryInitLimits();
+    this.syncAnimationWithGlobalPause();
   }
 
   private tryInitLimits() {
@@ -25,7 +28,28 @@ export class EnemyController extends Component {
     }
   }
 
+  private syncAnimationWithGlobalPause() {
+    const paused = GamePause.paused;
+    const anim = this.node.getComponent(Animation);
+    if (anim) {
+      if (paused) anim.pause();
+      else anim.resume();
+    }
+    this.pauseSynced = paused;
+  }
+
   update(dt: number) {
+    const paused = GamePause.paused;
+    if (paused !== this.pauseSynced) {
+      const anim = this.node.getComponent(Animation);
+      if (anim) {
+        if (paused) anim.pause();
+        else anim.resume();
+      }
+      this.pauseSynced = paused;
+    }
+    if (paused) return;
+
     const p = this.node.position;
     this.node.setPosition(new Vec3(p.x - this.speed * dt, p.y, p.z));
 
