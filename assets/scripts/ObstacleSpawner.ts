@@ -6,6 +6,7 @@ import { JumpTutorialController } from './JumpTutorialController';
 import { GameOverPresenter } from './GameOverPresenter';
 import { WinPresenter } from './WinPresenter';
 import { EndTilesSpawner } from './EndTilesSpawner';
+import { SoundController } from './SoundController';
 const { ccclass, property } = _decorator;
 
 @ccclass('ObstacleSpawner')
@@ -331,6 +332,7 @@ export class ObstacleSpawner extends Component {
   }
 
   private onPlayerHit() {
+    SoundController.instance?.playGirlHit();
     this.lives--;
     this.invincibilityTimer = this.invincibilityDurationSec;
     this.updateHearts();

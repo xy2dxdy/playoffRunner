@@ -13,6 +13,7 @@ import {
 } from 'cc';
 import { RunnerWorldScroller } from './RunnerWorldScroller';
 import { GamePause } from './GamePause';
+import { SoundController } from './SoundController';
 import { WinPresenter } from './WinPresenter';
 const { ccclass, property } = _decorator;
 
@@ -267,6 +268,7 @@ export class CollectibleSpawner extends Component {
     const rec = this.active.get(node);
     if (!rec || rec.flying) return;
     rec.flying = true;
+    SoundController.instance?.playMoney();
 
     const target = this.flyTargetNode!;
     const parent = target.parent;

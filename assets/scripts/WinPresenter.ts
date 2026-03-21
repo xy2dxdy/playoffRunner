@@ -3,6 +3,7 @@ import { CollectibleSpawner } from './CollectibleSpawner';
 import { ConfettiPlayer } from './ConfettiPlayer';
 import { GameEndOverlayHider } from './GameEndOverlayHider';
 import { WinPackshotRewardReveal } from './WinPackshotRewardReveal';
+import { SoundController } from './SoundController';
 
 const { ccclass, property } = _decorator;
 
@@ -57,6 +58,8 @@ export class WinPresenter extends Component {
       return;
     }
     GameEndOverlayHider.hideOnCanvas(this.node);
+    SoundController.instance?.enterPackshotMode();
+    SoundController.instance?.playPackshot();
     const pack = instantiate(this.packshotPrefab);
     pack.parent = this.node;
     pack.setPosition(new Vec3(0, 0, 0));

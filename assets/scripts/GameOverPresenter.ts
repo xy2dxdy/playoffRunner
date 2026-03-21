@@ -12,6 +12,7 @@ import {
 import { CollectibleSpawner } from './CollectibleSpawner';
 import { GameEndOverlayHider } from './GameEndOverlayHider';
 import { WinPackshotRewardReveal } from './WinPackshotRewardReveal';
+import { SoundController } from './SoundController';
 
 const { ccclass, property } = _decorator;
 
@@ -63,6 +64,7 @@ export class GameOverPresenter extends Component {
   public showGameOverSequence(): void {
     if (this.sequenceActive) return;
     this.sequenceActive = true;
+    SoundController.instance?.enterPackshotMode();
 
     this.failPrefab = this.failPrefabOverride;
     this.packshotPrefab = this.packshotLosePrefabOverride;
@@ -103,6 +105,7 @@ export class GameOverPresenter extends Component {
 
   private runFailAnimation(): void {
     GameEndOverlayHider.hideOnCanvas(this.node);
+    SoundController.instance?.playFail();
     const failRoot = instantiate(this.failPrefab!);
     failRoot.parent = this.node;
     failRoot.setPosition(new Vec3(0, 0, 0));

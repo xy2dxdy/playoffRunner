@@ -12,6 +12,7 @@ import {
   Color,
 } from 'cc';
 import { GamePause, TUTORIAL_JUMP_DONE } from './GamePause';
+import { SoundController } from './SoundController';
 const { ccclass, property } = _decorator;
 
 @ccclass('PlayerJump')
@@ -107,6 +108,7 @@ export class PlayerJump extends Component {
     this.velocityY = this.jumpVelocity;
     this.isGrounded = false;
     this.playAnim(this.jumpAnim);
+    SoundController.instance?.playJump();
 
     if (this.tutorialPause) {
       this.node.emit(TUTORIAL_JUMP_DONE);
