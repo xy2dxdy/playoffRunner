@@ -61,9 +61,9 @@ export class EndTilesRope extends Component {
 
   @property({
     tooltip:
-      'После разрыва: амплитуда качания по Z (градусы); верх нити закреплён у «потолка», маятник вокруг этой точки.',
+      'После разрыва: качание порванных ниток по Z (градусы). 0 — не крутить (статично). >0 — маятник от верхней точки.',
   })
-  swayTornRotationDeg = 1.8;
+  swayTornRotationDeg = 0;
 
   @property({
     tooltip: 'После разрыва: частота вращения порванных ниток (Гц); 0 = как swayWindHz',
@@ -282,8 +282,11 @@ export class EndTilesRope extends Component {
     this.fillTornTopAttachmentData();
   }
 
-  /** Верх центра AABB всех спрайтов группы в локали корня threadTorn* (точка крепления к «потолку»). */
-  private computeTornPivotLocalTop(tornRoot: Node): Vec3 | null {
+  /**
+   * Верхняя точка крепления в локали threadTorn*: не центр AABB (он смещает нить от колонки),
+   * а угол у колонки — слева для левой нити, справа для правой.
+   */
+  private computeTornPivotLocalTop(tornRoot: Node, side: 'left' | 'right' | 'center'): Vec3 | null {
     const trUi = tornRoot.getComponent(UITransform);
     if (!trUi) return null;
     let minX = Infinity;
@@ -316,6 +319,12 @@ export class EndTilesRope extends Component {
     };
     walk(tornRoot);
     if (!any || !Number.isFinite(maxY)) return null;
+    if (side === 'left') {
+      return new Vec3(minX, maxY, 0);
+    }
+    if (side === 'right') {
+      return new Vec3(maxX, maxY, 0);
+    }
     return new Vec3((minX + maxX) * 0.5, maxY, 0);
   }
 
@@ -328,7 +337,13 @@ export class EndTilesRope extends Component {
         e.tornAttachParent = undefined;
         continue;
       }
-      const pl = this.computeTornPivotLocalTop(e.node);
+      let pivotSide: 'left' | 'right' | 'center' = 'center';
+      if (e.node.name === this.leftTornName) {
+        pivotSide = 'left';
+      } else if (e.node.name === this.rightTornName) {
+        pivotSide = 'right';
+      }
+      const pl = this.computeTornPivotLocalTop(e.node, pivotSide);
       if (!pl) {
         e.tornPivotLocal = undefined;
         e.tornAttachParent = undefined;
@@ -380,6 +395,12 @@ export class EndTilesRope extends Component {
       if (!n.activeInHierarchy) continue;
 
       const torn = e.kind === 'torn';
+      if (torn && this.swayTornRotationDeg <= 0) {
+        n.setPosition(e.layoutPos.x, e.layoutPos.y, e.layoutPos.z);
+        n.setRotationFromEuler(e.layoutEuler.x, e.layoutEuler.y, e.layoutEuler.z);
+        continue;
+      }
+
       const windHzRaw = torn
         ? this.swayTornWindHz > 0
           ? this.swayTornWindHz
