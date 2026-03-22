@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Sprite, UITransform, Vec3, view } from 'cc';
+import { _decorator, Component, Node, Quat, Sprite, UITransform, Vec3, view } from 'cc';
 import { GamePause } from './GamePause';
 import { WinPresenter } from './WinPresenter';
 
@@ -12,6 +12,10 @@ type SwayEntry = {
   layoutEuler: Vec3;
   /** whole — целые нитки (thread1/2) и полосы 01/02; torn — нитки после разрыва (threadTorn* и вложения) */
   kind: SwayKind;
+  /** torn, корень: локальная точка верха группы (AABB) — вокруг неё вращение; без этого — вокруг якоря узла */
+  tornPivotLocal?: Vec3;
+  /** torn, корень: фиксированная позиция верха крепления в пространстве endTiles (родитель) */
+  tornAttachParent?: Vec3;
 };
 
 @ccclass('EndTilesRope')
@@ -21,6 +25,12 @@ export class EndTilesRope extends Component {
       'Растянуть ленту по видимой ширине экрана (9-slice на спрайте корня + сдвиг ниток к левому краю)',
   })
   stretchRibbonToViewport = true;
+
+  @property({
+    tooltip:
+      'Если true — растягивание по ширине только в портрете; в альбоме ширина остаётся как в префабе (без «растянутой» клетки).',
+  })
+  stretchRibbonOnlyInPortrait = true;
 
   @property({ tooltip: 'Доля ширины видимой области (1 = на всю ширину в локальных юнитах мира)' })
   ribbonViewportWidthFraction = 1;
@@ -50,9 +60,10 @@ export class EndTilesRope extends Component {
   swayWindHz = 5;
 
   @property({
-    tooltip: 'После разрыва: амплитуда вращения порванных ниток по Z (градусы), без смещения позиции',
+    tooltip:
+      'После разрыва: амплитуда качания по Z (градусы); верх нити закреплён у «потолка», маятник вокруг этой точки.',
   })
-  swayTornRotationDeg = 3.5;
+  swayTornRotationDeg = 1.8;
 
   @property({
     tooltip: 'После разрыва: частота вращения порванных ниток (Гц); 0 = как swayWindHz',
@@ -77,9 +88,9 @@ export class EndTilesRope extends Component {
 
   @property({
     tooltip:
-      'Глубина поддерева порванных ниток: висящие спрайты внутри threadTorn* тоже болтаются отдельно',
+      'Глубина поддерева threadTorn*: 0 — покачивать только корень группы (дети наследуют поворот, без «двойного» ветра и отставания от колонн). >0 — каждый узел качается отдельно (может выглядеть оторванным).',
   })
-  swayTornSubtreeDepth = 4;
+  swayTornSubtreeDepth = 0;
 
   @property({
     tooltip: 'Усиление для корня threadTorn* (прямой ребёнок endTiles)',
@@ -105,6 +116,17 @@ export class EndTilesRope extends Component {
 
   @property({ tooltip: 'Порванная правая нитка' })
   rightTornName = 'threadTorn2';
+
+  @property({
+    tooltip:
+      'Имя дочернего узла (полоса/колонка слева): фаза ветра левой порванной нитки совпадает с ним (у threadTorn* часто x=0, а у колонок — другой X).',
+  })
+  leftColumnWindLagName = '01';
+
+  @property({
+    tooltip: 'Имя узла колонки справа — та же логика фазы для правой порванной нитки.',
+  })
+  rightColumnWindLagName = '02';
 
   @property({ tooltip: 'Сужение хитбокса игрока по X' })
   playerHitboxShrinkX = 15;
@@ -171,11 +193,13 @@ export class EndTilesRope extends Component {
     const sprite = this.node.getComponent(Sprite);
     if (!ui || !sprite) {
       this.ensureSwayBases();
+      this.fillTornTopAttachmentData();
       return;
     }
 
     if (!this.stretchRibbonToViewport) {
       this.ensureSwayBases();
+      this.fillTornTopAttachmentData();
       return;
     }
 
@@ -188,16 +212,23 @@ export class EndTilesRope extends Component {
     const vs = view.getVisibleSize();
     const localVisibleW = worldScale > 1e-6 ? vs.width / worldScale : vs.width;
     const inset = this.ribbonHorizontalInsetLocal * 2;
-    const targetW = Math.max(
-      minW,
-      localVisibleW * this.ribbonViewportWidthFraction - inset,
-    );
+    const landscape = vs.width > vs.height;
+    let targetW: number;
+    if (this.stretchRibbonOnlyInPortrait && landscape) {
+      targetW = minW;
+    } else {
+      targetW = Math.max(
+        minW,
+        localVisibleW * this.ribbonViewportWidthFraction - inset,
+      );
+    }
 
     const curW = ui.contentSize.width;
     const h = ui.contentSize.height;
 
     if (Math.abs(targetW - curW) < 0.5) {
       this.ensureSwayBases();
+      this.fillTornTopAttachmentData();
       return;
     }
 
@@ -207,6 +238,9 @@ export class EndTilesRope extends Component {
       for (const e of this._swayBases) {
         if (e.node.parent === this.node) {
           e.layoutPos.x += dx;
+          if (e.tornAttachParent) {
+            e.tornAttachParent.x += dx;
+          }
         }
         e.node.setPosition(e.layoutPos.x, e.layoutPos.y, e.layoutPos.z);
         e.node.setRotationFromEuler(e.layoutEuler.x, e.layoutEuler.y, e.layoutEuler.z);
@@ -219,6 +253,7 @@ export class EndTilesRope extends Component {
     }
     ui.setContentSize(targetW, h);
     this.ensureSwayBases();
+    this.fillTornTopAttachmentData();
   }
 
   private ensureSwayBases() {
@@ -243,6 +278,71 @@ export class EndTilesRope extends Component {
           kind: 'whole',
         });
       }
+    }
+    this.fillTornTopAttachmentData();
+  }
+
+  /** Верх центра AABB всех спрайтов группы в локали корня threadTorn* (точка крепления к «потолку»). */
+  private computeTornPivotLocalTop(tornRoot: Node): Vec3 | null {
+    const trUi = tornRoot.getComponent(UITransform);
+    if (!trUi) return null;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let any = false;
+    const tmp = new Vec3();
+    const walk = (nd: Node) => {
+      if (!nd.activeInHierarchy) return;
+      const ui = nd.getComponent(UITransform);
+      if (ui) {
+        const rect = ui.getBoundingBoxToWorld();
+        const corners = [
+          new Vec3(rect.x, rect.y, 0),
+          new Vec3(rect.x + rect.width, rect.y, 0),
+          new Vec3(rect.x, rect.y + rect.height, 0),
+          new Vec3(rect.x + rect.width, rect.y + rect.height, 0),
+        ];
+        for (const wc of corners) {
+          trUi.convertToNodeSpaceAR(wc, tmp);
+          if (tmp.x < minX) minX = tmp.x;
+          if (tmp.x > maxX) maxX = tmp.x;
+          if (tmp.y > maxY) maxY = tmp.y;
+          any = true;
+        }
+      }
+      for (const c of nd.children) {
+        walk(c);
+      }
+    };
+    walk(tornRoot);
+    if (!any || !Number.isFinite(maxY)) return null;
+    return new Vec3((minX + maxX) * 0.5, maxY, 0);
+  }
+
+  /** После refresh баз: для корней threadTorn* — крепление к верху (не вращение вокруг центра 100×100). */
+  private fillTornTopAttachmentData() {
+    const parentNode = this.node;
+    for (const e of this._swayBases) {
+      if (e.kind !== 'torn' || e.node.parent !== parentNode) {
+        e.tornPivotLocal = undefined;
+        e.tornAttachParent = undefined;
+        continue;
+      }
+      const pl = this.computeTornPivotLocalTop(e.node);
+      if (!pl) {
+        e.tornPivotLocal = undefined;
+        e.tornAttachParent = undefined;
+        continue;
+      }
+      e.tornPivotLocal = pl;
+      const q0 = Quat.fromEuler(new Quat(), e.layoutEuler.x, e.layoutEuler.y, e.layoutEuler.z);
+      const rpl = new Vec3();
+      Vec3.transformQuat(rpl, pl, q0);
+      e.tornAttachParent = new Vec3(
+        e.layoutPos.x + rpl.x,
+        e.layoutPos.y + rpl.y,
+        e.layoutPos.z + rpl.z,
+      );
     }
   }
 
@@ -291,14 +391,27 @@ export class EndTilesRope extends Component {
       const vertPx = this.swayVerticalPx;
       const hBase = this.swayRotationHarmonic;
 
-      const lagK = torn ? this.swayTornLagPerLocalX : this.swayLagPerLocalX;
-      const lagRad = e.layoutPos.x * lagK;
+      // Корни threadTorn* в префабе часто в (0,0), а полосы 01/02 — у краёв; без якоря фаза ветра у ниток и у колонн разъезжается.
+      let lagX = e.layoutPos.x;
+      let lagK = torn ? this.swayTornLagPerLocalX : this.swayLagPerLocalX;
+      if (torn && e.node.parent === this.node) {
+        lagK = this.swayLagPerLocalX;
+        if (e.node.name === this.leftTornName) {
+          lagX = this.getWholeLayoutPosXForWindLag(this.leftColumnWindLagName);
+        } else if (e.node.name === this.rightTornName) {
+          lagX = this.getWholeLayoutPosXForWindLag(this.rightColumnWindLagName);
+        }
+      }
+      const lagRad = lagX * lagK;
       const windAngle = t * omega + this._windPhase0 + lagRad;
 
       let pieceAmp = 1;
       if (torn) {
+        // При глубине 0 качается только корень threadTorn* — один коэффициент, без разъезда кусков
         pieceAmp =
-          e.node.parent === this.node ? this.swayTornRootAmp : this.swayTornPieceAmp;
+          this.swayTornSubtreeDepth <= 0 || e.node.parent === this.node
+            ? this.swayTornRootAmp
+            : this.swayTornPieceAmp;
       }
 
       let dr: number;
@@ -313,9 +426,39 @@ export class EndTilesRope extends Component {
         dy = vertPx * gust * pieceAmp;
       }
 
-      n.setPosition(e.layoutPos.x, e.layoutPos.y + dy, e.layoutPos.z);
-      n.setRotationFromEuler(e.layoutEuler.x, e.layoutEuler.y, e.layoutEuler.z + dr);
+      if (
+        torn &&
+        e.tornPivotLocal &&
+        e.tornAttachParent &&
+        e.node.parent === this.node
+      ) {
+        const q = Quat.fromEuler(
+          new Quat(),
+          e.layoutEuler.x,
+          e.layoutEuler.y,
+          e.layoutEuler.z + dr,
+        );
+        const rpl = new Vec3();
+        Vec3.transformQuat(rpl, e.tornPivotLocal, q);
+        n.setPosition(
+          e.tornAttachParent.x - rpl.x,
+          e.tornAttachParent.y - rpl.y,
+          e.layoutPos.z,
+        );
+        n.setRotationFromEuler(e.layoutEuler.x, e.layoutEuler.y, e.layoutEuler.z + dr);
+      } else {
+        n.setPosition(e.layoutPos.x, e.layoutPos.y + dy, e.layoutPos.z);
+        n.setRotationFromEuler(e.layoutEuler.x, e.layoutEuler.y, e.layoutEuler.z + dr);
+      }
     }
+  }
+
+  /** Локальный X из базы покачивания для полосы-колонки (та же фаза волны, что у края). */
+  private getWholeLayoutPosXForWindLag(stripName: string): number {
+    const entry = this._swayBases.find((b) => b.node.name === stripName && b.kind === 'whole');
+    if (entry) return entry.layoutPos.x;
+    const ch = this.node.getChildByName(stripName);
+    return ch?.position.x ?? 0;
   }
 
   /** collectibleLayer → bgRoot: масштаб совпадает с RunnerWorldScroller.worldScale */

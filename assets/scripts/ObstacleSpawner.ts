@@ -9,6 +9,15 @@ import { EndTilesSpawner } from './EndTilesSpawner';
 import { SoundController } from './SoundController';
 const { ccclass, property } = _decorator;
 
+/** Параметры туториала прыжка без циклического импорта JumpTutorialController. */
+export type JumpTutorialTimingLike = {
+  normalizeTutorialTimingByWidth: boolean;
+  tutorialEnemyOffsetFromPlayerXPx: number;
+  tutorialDelaySec: number;
+  tutorialDelayOffsetSec: number;
+  legacyTutorialDelaySec(): number;
+};
+
 @ccclass('ObstacleSpawner')
 export class ObstacleSpawner extends Component {
   @property({ type: Prefab, tooltip: 'Префаб препятствия' })
@@ -26,8 +35,17 @@ export class ObstacleSpawner extends Component {
   @property({ tooltip: 'Скорость движения препятствий влево (px/s). Должна совпадать со scrollSpeed в RunnerWorldScroller.' })
   scrollSpeed = 300;
 
-  @property({ tooltip: 'Через сколько секунд после старта появится первое препятствие' })
+  @property({
+    tooltip:
+      'Задержка первого препятствия, если нет obstacleSpawnTimesSec. Для первого врага не используется, если задан enemySpawnTimesSec или firstEnemySpawnOverrideSec ≥ 0.',
+  })
   firstObstacleDelaySec = 2;
+
+  @property({
+    tooltip:
+      'Если ≥ 0 — время появления первого врага (сек от старта), переопределяет первый элемент enemySpawnTimesSec. Если -1 — как в массиве или firstObstacleDelaySec.',
+  })
+  firstEnemySpawnOverrideSec = -1;
 
   @property({ tooltip: 'Минимальный интервал между препятствиями (секунды)' })
   intervalMinSec = 1.5;
@@ -60,6 +78,12 @@ export class ObstacleSpawner extends Component {
     tooltip: 'Отступ спавна препятствий/врагов за правым краем (px). Одинаков в портрете и альбоме.',
   })
   hazardSpawnMarginPx = 140;
+
+  @property({
+    tooltip:
+      'Если > 0: при расчёте X спавна используется min(ширина canvas, это значение). Типичная ширина «портретного» вида (~390), чтобы в альбоме препятствия не появлялись заметно правее.',
+  })
+  hazardSpawnReferenceCanvasWidthPx = 0;
 
   @property({ tooltip: 'Сколько жизней у игрока' })
   maxLives = 3;
@@ -125,6 +149,46 @@ export class ObstacleSpawner extends Component {
     this.refreshCanvasWidth();
   }
 
+  /** Время появления первого врага (сек от старта уровня) — совпадает с handleSpawns. */
+  public getFirstEnemySpawnTimeSec(): number {
+    if (this.firstEnemySpawnOverrideSec >= 0) {
+      return this.firstEnemySpawnOverrideSec;
+    }
+    if (this.enemySpawnTimesSec && this.enemySpawnTimesSec.length > 0) {
+      return this.enemySpawnTimesSec[0];
+    }
+    return this.firstObstacleDelaySec;
+  }
+
+  private enemySpawnTimeAtIndex(index: number): number {
+    if (index === 0 && this.firstEnemySpawnOverrideSec >= 0) {
+      return this.firstEnemySpawnOverrideSec;
+    }
+    return this.enemySpawnTimesSec![index];
+  }
+
+  /**
+   * Секунды до паузы туториала: геометрия (первый враг у playerX+offset) + tutorialDelayOffsetSec.
+   */
+  public computeJumpTutorialDelayFor(tutorial: JumpTutorialTimingLike): number {
+    if (!tutorial.normalizeTutorialTimingByWidth || !this.enemyPrefab) {
+      return tutorial.legacyTutorialDelaySec();
+    }
+    this.refreshCanvasWidth();
+    const tSpawn = this.getFirstEnemySpawnTimeSec();
+    const spawnX = this.getHazardSpawnX();
+    const playerX = this.playerNode?.position.x ?? 0;
+    const targetX = playerX + tutorial.tutorialEnemyOffsetFromPlayerXPx;
+    const run = spawnX - targetX;
+    let geo: number;
+    if (run <= 0) {
+      geo = Math.max(tSpawn, tutorial.tutorialDelaySec);
+    } else {
+      geo = tSpawn + run / this.enemySpeed;
+    }
+    return geo + tutorial.tutorialDelayOffsetSec;
+  }
+
   private refreshCanvasWidth() {
     const vs = view.getVisibleSize();
     if (vs.width > 0) {
@@ -140,9 +204,15 @@ export class ObstacleSpawner extends Component {
     }
   }
 
-  /** Правый край + фиксированный отступ в px — время выхода в зону видимости не зависит от ориентации. */
-  private getHazardSpawnX(): number {
-    const half = this.canvasWidth * 0.5;
+  /**
+   * Правый край видимой области + отступ. Без ограничения ширины в альбоме half слишком большой — препятствие дальше вправо.
+   */
+  public getHazardSpawnX(): number {
+    const w =
+      this.hazardSpawnReferenceCanvasWidthPx > 0
+        ? Math.min(this.canvasWidth, this.hazardSpawnReferenceCanvasWidthPx)
+        : this.canvasWidth;
+    const half = w * 0.5;
     const x = half + this.hazardSpawnMarginPx;
     if (!Number.isFinite(x)) {
       return half + 120;
@@ -274,7 +344,7 @@ export class ObstacleSpawner extends Component {
     if (this.enemySpawnTimesSec && this.enemySpawnTimesSec.length > 0) {
       while (
         this.enemySpawnIndex < this.enemySpawnTimesSec.length &&
-        this.timeSinceStart >= this.enemySpawnTimesSec[this.enemySpawnIndex]
+        this.timeSinceStart >= this.enemySpawnTimeAtIndex(this.enemySpawnIndex)
       ) {
         this.spawnEnemy();
         this.enemySpawnIndex++;

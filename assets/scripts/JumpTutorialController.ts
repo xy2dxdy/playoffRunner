@@ -17,19 +17,41 @@ import {
 } from 'cc';
 import { GamePause, TUTORIAL_JUMP_DONE } from './GamePause';
 import { PlayerJump } from './PlayerJump';
+import { ObstacleSpawner } from './ObstacleSpawner';
 
 const { ccclass, property } = _decorator;
 
 @ccclass('JumpTutorialController')
 export class JumpTutorialController extends Component {
-  @property({ tooltip: 'Через сколько секунд после старта уровня (после Tap to start) показать туториал прыжка' })
+  @property({
+    tooltip:
+      'Если normalize выключен: полная задержка до паузы туториала (сек). Если normalize включён: это поле не используется — см. tutorialDelayOffsetSec.',
+  })
   tutorialDelaySec = 3;
 
   @property({
     tooltip:
-      'Дополнительные секунды к задержке в горизонтали (видимая ширина > высоты). Итог: tutorialDelaySec + это значение.',
+      'Только при normalizeTutorialTimingByWidth: добавить к рассчитанному по геометрии времени (сек). Отрицательное — пауза раньше.',
+  })
+  tutorialDelayOffsetSec = 0;
+
+  @property({
+    tooltip:
+      'Если normalizeTutorialTimingByWidth выключен: доп. секунды в альбоме (ширина > высоты). Итог: tutorialDelaySec + это значение.',
   })
   tutorialDelayExtraLandscapeSec = 2.5;
+
+  @property({
+    tooltip:
+      'Считать паузу туториала так, чтобы первый враг в момент паузы был на фиксированном расстоянии от игрока (учёт ширины экрана и spawn X). Иначе — только tutorialDelaySec + доп. для альбома.',
+  })
+  normalizeTutorialTimingByWidth = true;
+
+  @property({
+    tooltip:
+      'При normalize: смещение по X от центра игрока до центра врага в момент паузы (враг правее игрока). Подбирается под «окно» прыжка.',
+  })
+  tutorialEnemyOffsetFromPlayerXPx = 142;
 
   @property({ tooltip: 'UUID префаба tapToStart (assets/prefabs/tapToStart.prefab)' })
   tapToStartPrefabUuid = 'e2bb0059-66b2-4c43-b258-5162b82fbbf5';
@@ -95,8 +117,17 @@ export class JumpTutorialController extends Component {
     return this.jumpTutorialCompleted;
   }
 
-  /** Задержка до показа туториала с учётом ориентации (в альбоме дольше). */
+  /** Задержка до паузы туториала: по геометрии первого врага или legacy (сек + альбом). */
   public getEffectiveTutorialDelaySec(): number {
+    const spawner = this.node.getComponent(ObstacleSpawner);
+    if (spawner) {
+      return spawner.computeJumpTutorialDelayFor(this);
+    }
+    return this.legacyTutorialDelaySec();
+  }
+
+  /** Legacy: фиксированные секунды + опция для альбома (без ObstacleSpawner или normalize off). */
+  public legacyTutorialDelaySec(): number {
     const vs = view.getVisibleSize();
     const landscape = vs.width > vs.height;
     const extra = landscape ? Math.max(0, this.tutorialDelayExtraLandscapeSec) : 0;
